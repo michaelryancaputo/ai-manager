@@ -8,13 +8,15 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "postbuild": "chmod +x dist/ai-manager.js",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
     "dev": "tsx src/ai-manager.ts",
     "test": "vitest run",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "install-global": "npm install && npm run build && npm install -g ."
   },
   "keywords": [
     "llama.cpp",

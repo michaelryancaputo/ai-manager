@@ -4,10 +4,7 @@ import fs from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import {
-  input,
-  select,
-} from '@inquirer/prompts';
+import { input, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -20,48 +17,25 @@ import {
   SERVICE,
 } from './config.js';
 
-import {
-  findModels,
-  getCurrentModel,
-  setCurrentModel,
-} from './lib/models.js';
+import { findModels, getCurrentModel, setCurrentModel } from './lib/models.js';
 
-import {
-  formatBytes,
-  friendlyModelName,
-  printTitle,
-} from './lib/ui.js';
+import { formatBytes, friendlyModelName, printTitle } from './lib/ui.js';
 
-import {
-  runDownloadCommand,
-} from './commands/download.js';
+import { runDownloadCommand } from './commands/download.js';
 
-import {
-  runBenchmarkCommand,
-} from './commands/benchmark.js';
+import { runBenchmarkCommand } from './commands/benchmark.js';
 
-import {
-  runDeleteCommand,
-} from './commands/delete.js';
+import { runDeleteCommand } from './commands/delete.js';
 
-import type {
-  ModelInfo,
-  RunOptions,
-} from './types.js';
+import type { ModelInfo, RunOptions } from './types.js';
 
 const execFileAsync = promisify(execFile);
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error
-    ? error.message
-    : String(error);
+  return error instanceof Error ? error.message : String(error);
 }
 
-async function run(
-  command: string,
-  args: string[],
-  options: RunOptions = {},
-) {
+async function run(command: string, args: string[], options: RunOptions = {}) {
   return execFileAsync(command, args, {
     cwd: options.cwd,
     env: options.env ?? process.env,
@@ -70,7 +44,7 @@ async function run(
 }
 
 function sleep(milliseconds: number): Promise<void> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
   });
 }
@@ -88,30 +62,14 @@ function getFreeSpace(): number {
 }
 
 async function restartServer(): Promise<void> {
-  await run(
-    'docker',
-    [
-      'compose',
-      'restart',
-      SERVICE,
-    ],
-    {
-      cwd: COMPOSE_DIR,
-    },
-  );
+  await run('docker', ['compose', 'restart', SERVICE], {
+    cwd: COMPOSE_DIR,
+  });
 }
 
 async function isHealthy(): Promise<boolean> {
   try {
-    await run(
-      'curl',
-      [
-        '-fsS',
-        '--max-time',
-        '3',
-        `${API_URL}/v1/models`,
-      ],
-    );
+    await run('curl', ['-fsS', '--max-time', '3', `${API_URL}/v1/models`]);
 
     return true;
   } catch {
@@ -122,10 +80,7 @@ async function isHealthy(): Promise<boolean> {
 async function waitForHealth(): Promise<boolean> {
   const startedAt = Date.now();
 
-  while (
-    Date.now() - startedAt
-    < HEALTH_TIMEOUT_MS
-  ) {
+  while (Date.now() - startedAt < HEALTH_TIMEOUT_MS) {
     if (await isHealthy()) {
       return true;
     }
@@ -136,115 +91,66 @@ async function waitForHealth(): Promise<boolean> {
   return false;
 }
 
-async function showLogs(
-  lines = 100,
-): Promise<void> {
-  const child = spawn(
-    'docker',
-    [
-      'logs',
-      `--tail=${lines}`,
-      CONTAINER,
-    ],
-    {
-      stdio: 'inherit',
-    },
-  );
+async function showLogs(lines = 100): Promise<void> {
+  const child = spawn('docker', ['logs', `--tail=${lines}`, CONTAINER], {
+    stdio: 'inherit',
+  });
 
-  await new Promise<void>(
-    (resolve, reject) => {
-      child.on(
-        'error',
-        reject,
-      );
+  await new Promise<void>((resolve, reject) => {
+    child.on('error', reject);
 
-      child.on(
-        'exit',
-        code => {
-          if (code === 0) {
-            resolve();
-            return;
-          }
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
 
-          reject(
-            new Error(
-              `docker logs exited with code ${String(code)}`,
-            ),
-          );
-        },
-      );
-    },
-  );
+      reject(new Error(`docker logs exited with code ${String(code)}`));
+    });
+  });
 }
 
-async function switchModel(
-  target: ModelInfo,
-): Promise<boolean> {
+async function switchModel(target: ModelInfo): Promise<boolean> {
   const previous = getCurrentModel();
 
-  if (
-    previous
-    === target.relativePath
-  ) {
+  if (previous === target.relativePath) {
     console.log(
-      chalk.yellow(
-        `Already using ${friendlyModelName(
-          target.relativePath,
-        )}.`,
-      ),
+      chalk.yellow(`Already using ${friendlyModelName(target.relativePath)}.`),
     );
 
     return true;
   }
 
   const spinner = ora(
-    `Switching to ${friendlyModelName(
-      target.relativePath,
-    )}`,
+    `Switching to ${friendlyModelName(target.relativePath)}`,
   ).start();
 
   try {
-    setCurrentModel(
-      target.relativePath,
-    );
+    setCurrentModel(target.relativePath);
 
-    spinner.text =
-      'Restarting llama.cpp';
+    spinner.text = 'Restarting llama.cpp';
 
     await restartServer();
 
-    spinner.text =
-      'Waiting for llama.cpp to become healthy';
+    spinner.text = 'Waiting for llama.cpp to become healthy';
 
     if (!(await waitForHealth())) {
-      throw new Error(
-        'llama.cpp did not become healthy before the timeout.',
-      );
+      throw new Error('llama.cpp did not become healthy before the timeout.');
     }
 
     spinner.succeed(
-      chalk.green(
-        `Now using ${friendlyModelName(
-          target.relativePath,
-        )}`,
-      ),
+      chalk.green(`Now using ${friendlyModelName(target.relativePath)}`),
     );
 
     return true;
   } catch (error: unknown) {
     spinner.fail(
-      chalk.red(
-        `Failed to load ${friendlyModelName(
-          target.relativePath,
-        )}`,
-      ),
+      chalk.red(`Failed to load ${friendlyModelName(target.relativePath)}`),
     );
 
     if (previous) {
       const rollback = ora(
-        `Rolling back to ${friendlyModelName(
-          previous,
-        )}`,
+        `Rolling back to ${friendlyModelName(previous)}`,
       ).start();
 
       try {
@@ -252,62 +158,33 @@ async function switchModel(
         await restartServer();
 
         if (await waitForHealth()) {
-          rollback.succeed(
-            chalk.green(
-              'Rollback succeeded',
-            ),
-          );
+          rollback.succeed(chalk.green('Rollback succeeded'));
         } else {
-          rollback.fail(
-            chalk.red(
-              'Rollback failed health check',
-            ),
-          );
+          rollback.fail(chalk.red('Rollback failed health check'));
         }
-      } catch (
-        rollbackError: unknown
-      ) {
+      } catch (rollbackError: unknown) {
         rollback.fail(
-          chalk.red(
-            `Rollback failed: ${errorMessage(
-              rollbackError,
-            )}`,
-          ),
+          chalk.red(`Rollback failed: ${errorMessage(rollbackError)}`),
         );
       }
     }
 
-    console.error(
-      chalk.red(
-        errorMessage(error),
-      ),
-    );
+    console.error(chalk.red(errorMessage(error)));
 
-    console.log(
-      chalk.dim(
-        '\nRecent llama.cpp logs:\n',
-      ),
-    );
+    console.log(chalk.dim('\nRecent llama.cpp logs:\n'));
 
-    await showLogs(40).catch(
-      () => undefined,
-    );
+    await showLogs(40).catch(() => undefined);
 
     return false;
   }
 }
 
-async function interactiveModelSelect():
-Promise<void> {
+async function interactiveModelSelect(): Promise<void> {
   const models = findModels();
   const current = getCurrentModel();
 
   if (models.length === 0) {
-    console.error(
-      chalk.red(
-        'No GGUF models were found.',
-      ),
-    );
+    console.error(chalk.red('No GGUF models were found.'));
 
     return;
   }
@@ -319,19 +196,13 @@ Promise<void> {
 
   console.log(
     `${chalk.bold('API:')} ${
-      healthy
-        ? chalk.green('● healthy')
-        : chalk.red('● unavailable')
+      healthy ? chalk.green('● healthy') : chalk.red('● unavailable')
     }`,
   );
 
   console.log(
     `${chalk.bold('Current:')} ${
-      current
-        ? chalk.cyan(
-          friendlyModelName(current),
-        )
-        : chalk.yellow('none')
+      current ? chalk.cyan(friendlyModelName(current)) : chalk.yellow('none')
     }`,
   );
 
@@ -341,46 +212,28 @@ Promise<void> {
     message: 'Select a model',
     pageSize: 15,
     choices: [
-      ...models.map(
-        (model: ModelInfo) => {
-          const isCurrent =
-            model.relativePath === current;
+      ...models.map((model: ModelInfo) => {
+        const isCurrent = model.relativePath === current;
 
-          return {
-            name: [
-              isCurrent
-                ? chalk.green('●')
-                : chalk.dim('○'),
+        return {
+          name: [
+            isCurrent ? chalk.green('●') : chalk.dim('○'),
 
-              isCurrent
-                ? chalk.bold.green(
-                  friendlyModelName(
-                    model.relativePath,
-                  ),
-                )
-                : chalk.white(
-                  friendlyModelName(
-                    model.relativePath,
-                  ),
-                ),
+            isCurrent
+              ? chalk.bold.green(friendlyModelName(model.relativePath))
+              : chalk.white(friendlyModelName(model.relativePath)),
 
-              chalk.dim(
-                formatBytes(model.size),
-              ),
+            chalk.dim(formatBytes(model.size)),
 
-              isCurrent
-                ? chalk.yellow('current')
-                : '',
-            ]
-              .filter(Boolean)
-              .join('  '),
+            isCurrent ? chalk.yellow('current') : '',
+          ]
+            .filter(Boolean)
+            .join('  '),
 
-            value: model,
-            description:
-              model.relativePath,
-          };
-        },
-      ),
+          value: model,
+          description: model.relativePath,
+        };
+      }),
       {
         name: chalk.dim('← Back'),
         value: null,
@@ -401,34 +254,21 @@ function listModels(): void {
   const models = findModels();
 
   if (models.length === 0) {
-    console.log(
-      chalk.yellow(
-        'No models found.',
-      ),
-    );
+    console.log(chalk.yellow('No models found.'));
 
     return;
   }
 
   for (const model of models) {
-    const isCurrent =
-      model.relativePath === current;
+    const isCurrent = model.relativePath === current;
 
-    const marker = isCurrent
-      ? chalk.green('●')
-      : chalk.dim('○');
+    const marker = isCurrent ? chalk.green('●') : chalk.dim('○');
 
     const name = isCurrent
-      ? chalk.bold.green(
-        model.relativePath,
-      )
+      ? chalk.bold.green(model.relativePath)
       : model.relativePath;
 
-    console.log(
-      `${marker} ${name} ${chalk.dim(
-        formatBytes(model.size),
-      )}`,
-    );
+    console.log(`${marker} ${name} ${chalk.dim(formatBytes(model.size))}`);
   }
 }
 
@@ -436,44 +276,25 @@ async function showStatus(): Promise<void> {
   const current = getCurrentModel();
 
   const activeModel = findModels().find(
-    (model: ModelInfo) =>
-      model.relativePath === current,
+    (model: ModelInfo) => model.relativePath === current,
   );
 
   printTitle();
 
   console.log(
     `${chalk.bold('Selected:')} ${
-      current
-        ? chalk.cyan(current)
-        : chalk.yellow('none')
+      current ? chalk.cyan(current) : chalk.yellow('none')
     }`,
   );
 
   if (activeModel) {
     console.log(
-      `${chalk.bold('Name:')} ${
-        friendlyModelName(
-          activeModel.relativePath,
-        )
-      }`,
+      `${chalk.bold('Name:')} ${friendlyModelName(activeModel.relativePath)}`,
     );
 
-    console.log(
-      `${chalk.bold('Size:')} ${
-        formatBytes(
-          activeModel.size,
-        )
-      }`,
-    );
+    console.log(`${chalk.bold('Size:')} ${formatBytes(activeModel.size)}`);
   } else if (current) {
-    console.log(
-      `${chalk.bold('File:')} ${
-        chalk.red(
-          'missing or invalid',
-        )
-      }`,
-    );
+    console.log(`${chalk.bold('File:')} ${chalk.red('missing or invalid')}`);
   }
 
   const healthy = await isHealthy();
@@ -481,35 +302,21 @@ async function showStatus(): Promise<void> {
   console.log(
     `${chalk.bold('API:')} ${
       healthy
-        ? chalk.green(
-          `${API_URL} — healthy`,
-        )
-        : chalk.red(
-          `${API_URL} — unavailable`,
-        )
+        ? chalk.green(`${API_URL} — healthy`)
+        : chalk.red(`${API_URL} — unavailable`)
     }`,
   );
 
   try {
-    const { stdout } =
-      await run(
-        'docker',
-        [
-          'compose',
-          'ps',
-          '--status',
-          'running',
-          '--services',
-        ],
-        {
-          cwd: COMPOSE_DIR,
-        },
-      );
+    const { stdout } = await run(
+      'docker',
+      ['compose', 'ps', '--status', 'running', '--services'],
+      {
+        cwd: COMPOSE_DIR,
+      },
+    );
 
-    const services = stdout
-      .trim()
-      .split('\n')
-      .filter(Boolean);
+    const services = stdout.trim().split('\n').filter(Boolean);
 
     console.log(
       `${chalk.bold('Container:')} ${
@@ -519,56 +326,31 @@ async function showStatus(): Promise<void> {
       }`,
     );
   } catch {
-    console.log(
-      `${chalk.bold('Container:')} ${
-        chalk.red('unknown')
-      }`,
-    );
+    console.log(`${chalk.bold('Container:')} ${chalk.red('unknown')}`);
   }
 
-  console.log(
-    `${chalk.bold('Free space:')} ${
-      formatBytes(
-        getFreeSpace(),
-      )
-    }`,
-  );
+  console.log(`${chalk.bold('Free space:')} ${formatBytes(getFreeSpace())}`);
 
   console.log();
 }
 
 async function restartCommand(): Promise<void> {
-  const spinner = ora(
-    'Restarting llama.cpp',
-  ).start();
+  const spinner = ora('Restarting llama.cpp').start();
 
   try {
     await restartServer();
 
-    spinner.text =
-      'Waiting for llama.cpp to become healthy';
+    spinner.text = 'Waiting for llama.cpp to become healthy';
 
     if (await waitForHealth()) {
-      spinner.succeed(
-        chalk.green(
-          'llama.cpp restarted successfully',
-        ),
-      );
+      spinner.succeed(chalk.green('llama.cpp restarted successfully'));
     } else {
-      spinner.fail(
-        chalk.red(
-          'llama.cpp failed its health check',
-        ),
-      );
+      spinner.fail(chalk.red('llama.cpp failed its health check'));
 
       process.exitCode = 1;
     }
   } catch (error: unknown) {
-    spinner.fail(
-      chalk.red(
-        errorMessage(error),
-      ),
-    );
+    spinner.fail(chalk.red(errorMessage(error)));
 
     process.exitCode = 1;
   }
@@ -576,8 +358,7 @@ async function restartCommand(): Promise<void> {
 
 async function pause(): Promise<void> {
   await input({
-    message:
-      'Press Enter to return',
+    message: 'Press Enter to return',
   });
 }
 
@@ -593,31 +374,17 @@ async function mainMenu(): Promise<void> {
 
     console.log(
       `${chalk.bold('Server:')} ${
-        healthy
-          ? chalk.green('● healthy')
-          : chalk.red('● unavailable')
+        healthy ? chalk.green('● healthy') : chalk.red('● unavailable')
       }`,
     );
 
     console.log(
       `${chalk.bold('Model:')} ${
-        current
-          ? chalk.cyan(
-            friendlyModelName(
-              current,
-            ),
-          )
-          : chalk.yellow('none')
+        current ? chalk.cyan(friendlyModelName(current)) : chalk.yellow('none')
       }`,
     );
 
-    console.log(
-      `${chalk.bold('Free space:')} ${
-        formatBytes(
-          getFreeSpace(),
-        )
-      }`,
-    );
+    console.log(`${chalk.bold('Free space:')} ${formatBytes(getFreeSpace())}`);
 
     console.log();
 
@@ -629,8 +396,7 @@ async function mainMenu(): Promise<void> {
           value: 'switch',
         },
         {
-          name:
-            'Download model from Hugging Face',
+          name: 'Download model from Hugging Face',
           value: 'download',
         },
         {
@@ -638,8 +404,7 @@ async function mainMenu(): Promise<void> {
           value: 'delete',
         },
         {
-          name:
-            'Benchmark current model',
+          name: 'Benchmark current model',
           value: 'benchmark',
         },
         {
@@ -647,8 +412,7 @@ async function mainMenu(): Promise<void> {
           value: 'status',
         },
         {
-          name:
-            'Restart llama.cpp',
+          name: 'Restart llama.cpp',
           value: 'restart',
         },
         {
@@ -670,9 +434,7 @@ async function mainMenu(): Promise<void> {
       case 'download':
         clearScreen();
 
-        await runDownloadCommand(
-          switchModel,
-        );
+        await runDownloadCommand(switchModel);
 
         await pause();
         break;
@@ -729,9 +491,7 @@ async function mainMenu(): Promise<void> {
 
 function showHelp(): void {
   console.log(`
-${chalk.bold.cyan(
-    'AI Model Manager',
-  )}
+${chalk.bold.cyan('AI Model Manager')}
 
 ${chalk.bold('Usage')}
   manager                Open the main menu
@@ -767,9 +527,7 @@ async function main(): Promise<void> {
       break;
 
     case 'download':
-      await runDownloadCommand(
-        switchModel,
-      );
+      await runDownloadCommand(switchModel);
       break;
 
     case 'delete':
@@ -787,10 +545,7 @@ async function main(): Promise<void> {
       break;
 
     case 'current':
-      console.log(
-        getCurrentModel()
-        ?? 'none',
-      );
+      console.log(getCurrentModel() ?? 'none');
       break;
 
     case 'status':
@@ -802,20 +557,9 @@ async function main(): Promise<void> {
       break;
 
     case 'logs': {
-      const requested =
-        Number.parseInt(
-          process.argv[3]
-          ?? '100',
-          10,
-        );
+      const requested = Number.parseInt(process.argv[3] ?? '100', 10);
 
-      await showLogs(
-        Number.isFinite(
-          requested,
-        )
-          ? requested
-          : 100,
-      );
+      await showLogs(Number.isFinite(requested) ? requested : 100);
 
       break;
     }
@@ -832,51 +576,33 @@ async function main(): Promise<void> {
       break;
 
     default:
-      console.error(
-        chalk.red(
-          `Unknown command: ${command}`,
-        ),
-      );
+      console.error(chalk.red(`Unknown command: ${command}`));
 
       showHelp();
       process.exitCode = 1;
   }
 }
 
-main().catch(
-  (error: unknown) => {
-    const message =
-      errorMessage(error);
+main().catch((error: unknown) => {
+  const message = errorMessage(error);
 
-    if (
-      (
-        error instanceof Error
-        && error.name
-        === 'ExitPromptError'
-      )
-      || message.includes('SIGINT')
-      || message.includes(
-        'force closed',
-      )
-    ) {
-      console.log();
-      console.log(
-        chalk.dim('Cancelled.'),
-      );
+  if (
+    (error instanceof Error && error.name === 'ExitPromptError') ||
+    message.includes('SIGINT') ||
+    message.includes('force closed')
+  ) {
+    console.log();
+    console.log(chalk.dim('Cancelled.'));
 
-      process.exit(0);
-    }
+    process.exit(0);
+  }
 
-    console.error();
-    console.error(
-      chalk.red(
-        error instanceof Error
-          ? error.stack
-            ?? error.message
-          : message,
-      ),
-    );
+  console.error();
+  console.error(
+    chalk.red(
+      error instanceof Error ? (error.stack ?? error.message) : message,
+    ),
+  );
 
-    process.exitCode = 1;
-  },
-);
+  process.exitCode = 1;
+});

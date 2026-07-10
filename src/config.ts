@@ -2,6 +2,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import dotenv from 'dotenv';
 
+import { requiredPositiveInteger } from './lib/env.js';
+
 const currentFile = fileURLToPath(import.meta.url);
 const srcDirectory = path.dirname(currentFile);
 const projectDirectory = path.resolve(srcDirectory, '..');
@@ -15,21 +17,8 @@ function required(name: string): string {
   if (!value) {
     throw new Error(
       `Missing required environment variable: ${name}\n` +
-      `Expected configuration file: ${envPath}\n` +
-      'Copy .env.example to .env and configure it.',
-    );
-  }
-
-  return value;
-}
-
-function positiveInteger(name: string, fallback: number): number {
-  const rawValue = process.env[name] ?? String(fallback);
-  const value = Number.parseInt(rawValue, 10);
-
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(
-      `${name} must be a positive integer; received: ${rawValue}`,
+        `Expected configuration file: ${envPath}\n` +
+        'Copy .env.example to .env and configure it.',
     );
   }
 
@@ -45,7 +34,7 @@ export const SERVICE: string = required('AI_COMPOSE_SERVICE');
 export const CONTAINER: string = required('AI_CONTAINER_NAME');
 export const API_URL: string = required('AI_API_URL');
 
-export const HEALTH_TIMEOUT_MS: number = positiveInteger(
+export const HEALTH_TIMEOUT_MS: number = requiredPositiveInteger(
   'AI_HEALTH_TIMEOUT_MS',
-  120_000,
+  process.env.AI_HEALTH_TIMEOUT_MS ?? '120000',
 );

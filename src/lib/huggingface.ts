@@ -1,21 +1,10 @@
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { promisify } from 'node:util';
 
-export interface HuggingFaceFile {
-  path: string;
-  size: number;
-}
+import type { HuggingFaceFile, HuggingFaceModelGroup } from '../types.js';
 
-export interface HuggingFaceModelGroup {
-  id: string;
-  label: string;
-  files: HuggingFaceFile[];
-  size: number;
-  sharded: boolean;
-  shardPrefix?: string;
-  shardCount?: number;
-  directory?: string;
-}
+const execFileAsync = promisify(execFile);
 
 interface HuggingFaceTreeItem {
   type?: string;
@@ -24,6 +13,13 @@ interface HuggingFaceTreeItem {
   lfs?: {
     size?: number;
   };
+}
+
+export class HuggingFaceAuthenticationError extends Error {
+  constructor(message = 'Hugging Face authentication is required.') {
+    super(message);
+    this.name = 'HuggingFaceAuthenticationError';
+  }
 }
 
 export function parseRepositoryId(input: string): string {
@@ -48,8 +44,8 @@ export function parseRepositoryId(input: string): string {
   }
 
   if (
-    url.hostname !== 'huggingface.co'
-    && url.hostname !== 'www.huggingface.co'
+    url.hostname !== 'huggingface.co' &&
+    url.hostname !== 'www.huggingface.co'
   ) {
     throw new Error('The URL must point to huggingface.co.');
   }
@@ -57,21 +53,73 @@ export function parseRepositoryId(input: string): string {
   const parts = url.pathname.split('/').filter(Boolean);
 
   if (parts.length < 2) {
-    throw new Error(
-      'The Hugging Face URL does not contain a repository name.',
-    );
+    throw new Error('The Hugging Face URL does not contain a repository name.');
   }
 
   return `${parts[0]}/${parts[1]}`;
 }
 
 export function repositoryDirectoryName(repositoryId: string): string {
-  return repositoryId
-    .split('/')
-    .at(-1)!
+  const repositoryName = repositoryId.split('/').at(-1);
+
+  if (!repositoryName) {
+    throw new Error(`Invalid repository ID: ${repositoryId}`);
+  }
+
+  return repositoryName
     .replace(/-GGUF$/i, '')
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
     .toLowerCase();
+}
+
+export async function getHuggingFaceToken(): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('hf', ['auth', 'token'], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+    });
+
+    const token = stdout.trim();
+
+    return token || null;
+  } catch {
+    return null;
+  }
+}
+
+export async function runHuggingFaceLogin(): Promise<void> {
+  const child = spawn('hf', ['auth', 'login'], {
+    stdio: 'inherit',
+    env: process.env,
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    child.on('error', (error) => {
+      if (
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ENOENT'
+      ) {
+        reject(
+          new Error(
+            'The `hf` command is not installed or is not available in PATH.',
+          ),
+        );
+        return;
+      }
+
+      reject(error);
+    });
+
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+
+      reject(new Error(`Hugging Face login exited with code ${String(code)}.`));
+    });
+  });
 }
 
 export async function listRepositoryFiles(
@@ -86,48 +134,55 @@ export async function listRepositoryFiles(
     `https://huggingface.co/api/models/${encodedRepository}` +
     '/tree/main?recursive=true&expand=true';
 
+  const token = await getHuggingFaceToken();
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+  };
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-    },
+    headers,
   });
 
   if (response.status === 401) {
-    throw new Error(
-      'This repository requires authentication. Run `hf auth login` first.',
+    throw new HuggingFaceAuthenticationError(
+      'This repository requires authentication, or your token does not have access.',
+    );
+  }
+
+  if (response.status === 403) {
+    throw new HuggingFaceAuthenticationError(
+      'Your Hugging Face account does not have access to this gated repository.',
     );
   }
 
   if (response.status === 404) {
-    throw new Error(
-      `Hugging Face repository not found: ${repositoryId}`,
-    );
+    throw new Error(`Hugging Face repository not found: ${repositoryId}`);
   }
 
   if (!response.ok) {
-    throw new Error(
-      `Hugging Face returned HTTP ${response.status}.`,
-    );
+    throw new Error(`Hugging Face returned HTTP ${response.status}.`);
   }
 
   const data = (await response.json()) as HuggingFaceTreeItem[];
 
   if (!Array.isArray(data)) {
-    throw new Error(
-      'Hugging Face returned an unexpected repository response.',
-    );
+    throw new Error('Hugging Face returned an unexpected repository response.');
   }
 
   return data
     .filter(
-      (item): item is Required<
-        Pick<HuggingFaceTreeItem, 'path'>
-      > &
-        HuggingFaceTreeItem =>
-        item.type === 'file'
-        && typeof item.path === 'string',
+      (
+        item,
+      ): item is HuggingFaceTreeItem & {
+        path: string;
+      } => item.type === 'file' && typeof item.path === 'string',
     )
-    .map(item => ({
+    .map((item) => ({
       path: item.path,
       size: item.size ?? item.lfs?.size ?? 0,
     }));
@@ -138,10 +193,7 @@ function isGguf(filename: string): boolean {
 }
 
 function isMmproj(filename: string): boolean {
-  return path
-    .basename(filename)
-    .toLowerCase()
-    .startsWith('mmproj-');
+  return path.basename(filename).toLowerCase().startsWith('mmproj-');
 }
 
 function parseShard(filename: string): {
@@ -149,18 +201,24 @@ function parseShard(filename: string): {
   shardNumber: number;
   shardCount: number;
 } | null {
-  const match = filename.match(
-    /^(.*)-(\d{5})-of-(\d{5})\.gguf$/i,
-  );
+  const match = filename.match(/^(.*)-(\d{5})-of-(\d{5})\.gguf$/i);
 
   if (!match) {
     return null;
   }
 
+  const prefix = match[1];
+  const shardNumber = match[2];
+  const shardCount = match[3];
+
+  if (!prefix || !shardNumber || !shardCount) {
+    return null;
+  }
+
   return {
-    prefix: match[1]!,
-    shardNumber: Number.parseInt(match[2]!, 10),
-    shardCount: Number.parseInt(match[3]!, 10),
+    prefix,
+    shardNumber: Number.parseInt(shardNumber, 10),
+    shardCount: Number.parseInt(shardCount, 10),
   };
 }
 
@@ -179,7 +237,7 @@ export function quantizationName(filename: string): string {
   for (const pattern of patterns) {
     const match = upper.match(pattern);
 
-    if (match) {
+    if (match?.[0]) {
       return match[0];
     }
   }
@@ -204,9 +262,7 @@ function quantizationRank(filename: string): number {
     'F16',
   ];
 
-  const index = preferred.findIndex(value =>
-    upper.includes(value),
-  );
+  const index = preferred.findIndex((value) => upper.includes(value));
 
   return index === -1 ? preferred.length : index;
 }
@@ -236,15 +292,17 @@ export function groupGgufFiles(
     }
 
     const directory = path.dirname(file.path);
-    const normalizedDirectory =
-      directory === '.' ? '' : directory;
+
+    const normalizedDirectory = directory === '.' ? '' : directory;
 
     const groupId = path.posix.join(
       normalizedDirectory,
       `${shard.prefix}-sharded`,
     );
 
-    const group = groups.get(groupId) ?? {
+    const existing = groups.get(groupId);
+
+    const group: HuggingFaceModelGroup = existing ?? {
       id: groupId,
       label: `${shard.prefix} (${shard.shardCount} shards)`,
       files: [],
@@ -262,16 +320,13 @@ export function groupGgufFiles(
   }
 
   return [...groups.values()]
-    .map(group => ({
+    .map((group) => ({
       ...group,
-      files: [...group.files].sort((a, b) =>
-        a.path.localeCompare(b.path),
-      ),
+      files: [...group.files].sort((a, b) => a.path.localeCompare(b.path)),
     }))
     .sort((a, b) => {
       const rankDifference =
-        quantizationRank(a.label)
-        - quantizationRank(b.label);
+        quantizationRank(a.label) - quantizationRank(b.label);
 
       if (rankDifference !== 0) {
         return rankDifference;
@@ -281,20 +336,14 @@ export function groupGgufFiles(
     });
 }
 
-export function downloadPatterns(
-  group: HuggingFaceModelGroup,
-): string[] {
+export function downloadPatterns(group: HuggingFaceModelGroup): string[] {
   if (!group.sharded) {
-    return group.files.map(file => file.path);
+    return group.files.map((file) => file.path);
   }
 
-  const directoryPrefix = group.directory
-    ? `${group.directory}/`
-    : '';
+  const directoryPrefix = group.directory ? `${group.directory}/` : '';
 
-  return [
-    `${directoryPrefix}${group.shardPrefix}-*-of-*.gguf`,
-  ];
+  return [`${directoryPrefix}${group.shardPrefix}-*-of-*.gguf`];
 }
 
 export async function downloadModel(options: {
@@ -302,21 +351,13 @@ export async function downloadModel(options: {
   patterns: string[];
   destination: string;
 }): Promise<void> {
-  const args = [
-    'download',
-    options.repositoryId,
-  ];
+  const args = ['download', options.repositoryId];
 
   for (const pattern of options.patterns) {
     args.push('--include', pattern);
   }
 
-  args.push(
-    '--local-dir',
-    options.destination,
-    '--format',
-    'human',
-  );
+  args.push('--local-dir', options.destination, '--format', 'human');
 
   const child = spawn('hf', args, {
     stdio: 'inherit',
@@ -324,35 +365,30 @@ export async function downloadModel(options: {
   });
 
   await new Promise<void>((resolve, reject) => {
-    child.on('error', error => {
+    child.on('error', (error) => {
       if (
-        error instanceof Error
-        && 'code' in error
-        && error.code === 'ENOENT'
+        error instanceof Error &&
+        'code' in error &&
+        error.code === 'ENOENT'
       ) {
         reject(
           new Error(
             'The `hf` command is not installed or is not available in PATH.',
           ),
         );
-
         return;
       }
 
       reject(error);
     });
 
-    child.on('exit', code => {
+    child.on('exit', (code) => {
       if (code === 0) {
         resolve();
         return;
       }
 
-      reject(
-        new Error(
-          `hf download exited with code ${String(code)}.`,
-        ),
-      );
+      reject(new Error(`hf download exited with code ${String(code)}.`));
     });
   });
 }

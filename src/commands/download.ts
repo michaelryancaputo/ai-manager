@@ -1,11 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {
-  confirm,
-  input,
-  select,
-} from '@inquirer/prompts';
+import { confirm, input, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -15,29 +11,29 @@ import {
   downloadModel,
   downloadPatterns,
   groupGgufFiles,
+  HuggingFaceAuthenticationError,
   listRepositoryFiles,
   parseRepositoryId,
   quantizationName,
   repositoryDirectoryName,
+  runHuggingFaceLogin,
 } from '../lib/huggingface.js';
 
 import { formatBytes } from '../lib/ui.js';
 
-import type {
-  HuggingFaceModelGroup,
-  ModelInfo,
-} from '../types.js';
+import { rankModelRecommendations } from '../services/recommendations.js';
 
-type ActivateModel = (
-  model: ModelInfo,
-) => Promise<boolean>;
+import type { HuggingFaceModelGroup, ModelInfo } from '../types.js';
+
+type ActivateModel = (model: ModelInfo) => Promise<boolean>;
 
 function availableSpace(directory: string): number {
   const stats = fs.statfsSync(directory);
+
   return stats.bavail * stats.bsize;
 }
 
-function validateInstallDirectory(value: string): true | string {
+export function validateInstallDirectory(value: string): true | string {
   const trimmed = value.trim();
 
   if (!trimmed) {
@@ -49,9 +45,9 @@ function validateInstallDirectory(value: string): true | string {
   }
 
   if (
-    trimmed === '..'
-    || trimmed.startsWith('../')
-    || trimmed.includes('/../')
+    trimmed === '..' ||
+    trimmed.startsWith('../') ||
+    trimmed.includes('/../')
   ) {
     return 'The install directory cannot leave the models directory.';
   }
@@ -78,6 +74,64 @@ function getDownloadedTarget(
     fullPath,
     size: stats.size,
   };
+}
+
+async function inspectRepository(
+  repositoryId: string,
+): Promise<HuggingFaceModelGroup[] | null> {
+  let attemptedLogin = false;
+
+  while (true) {
+    const spinner = ora(`Inspecting ${repositoryId}`).start();
+
+    try {
+      const files = await listRepositoryFiles(repositoryId);
+
+      const groups = groupGgufFiles(files);
+
+      if (groups.length === 0) {
+        throw new Error('No GGUF model files were found in this repository.');
+      }
+
+      spinner.succeed(
+        `Found ${groups.length} model option${groups.length === 1 ? '' : 's'}`,
+      );
+
+      return groups;
+    } catch (error: unknown) {
+      spinner.fail('Could not inspect the repository');
+
+      if (error instanceof HuggingFaceAuthenticationError && !attemptedLogin) {
+        console.log();
+        console.log(chalk.yellow(error.message));
+
+        const login = await confirm({
+          message: 'Log in to Hugging Face now?',
+          default: true,
+        });
+
+        if (!login) {
+          return null;
+        }
+
+        console.log();
+
+        await runHuggingFaceLogin();
+
+        attemptedLogin = true;
+
+        console.log();
+        console.log(
+          chalk.green('Authentication completed. Retrying repository access…'),
+        );
+        console.log();
+
+        continue;
+      }
+
+      throw error;
+    }
+  }
 }
 
 export async function runDownloadCommand(
@@ -110,76 +164,61 @@ export async function runDownloadCommand(
 
   const repositoryInput = await input({
     message: 'Hugging Face repository or URL',
+
     validate(value: string): true | string {
       try {
         parseRepositoryId(value);
         return true;
       } catch (error: unknown) {
-        return error instanceof Error
-          ? error.message
-          : String(error);
+        return error instanceof Error ? error.message : String(error);
       }
     },
   });
 
   const repositoryId = parseRepositoryId(repositoryInput);
-  const spinner = ora(`Inspecting ${repositoryId}`).start();
 
-  let groups: HuggingFaceModelGroup[];
+  const groups = await inspectRepository(repositoryId);
 
-  try {
-    const files = await listRepositoryFiles(repositoryId);
-    groups = groupGgufFiles(files);
-
-    if (groups.length === 0) {
-      throw new Error(
-        'No GGUF model files were found in this repository.',
-      );
-    }
-
-    spinner.succeed(
-      `Found ${groups.length} model option${
-        groups.length === 1 ? '' : 's'
-      }`,
-    );
-  } catch (error: unknown) {
-    spinner.fail('Could not inspect the repository');
-    throw error;
+  if (!groups) {
+    return;
   }
 
   console.log();
+
+  const rankedGroups = rankModelRecommendations(groups);
 
   const selectedGroup = await select<HuggingFaceModelGroup | null>({
     message: 'Select a model',
     pageSize: 15,
     choices: [
-      ...groups.map(group => {
+      ...rankedGroups.map(({ group, recommendation }) => {
         const quantization = quantizationName(group.label);
-        const isRecommended = quantization === 'Q4_K_M';
 
         return {
           name: [
             group.label,
             chalk.cyan(quantization),
+
             group.size > 0
               ? chalk.dim(formatBytes(group.size))
               : chalk.dim('size unknown'),
-            isRecommended
-              ? chalk.green('recommended')
-              : '',
-            group.sharded
-              ? chalk.yellow(`${group.files.length} shards`)
-              : '',
+
+            recommendation.recommended ? chalk.green('recommended') : '',
+
+            group.sharded ? chalk.yellow(`${group.files.length} shards`) : '',
           ]
             .filter(Boolean)
             .join('  '),
 
           value: group,
-          description: group.files
-            .map(file => file.path)
-            .join('\n'),
+
+          description: [
+            ...group.files.map((file) => file.path),
+            recommendation.summary,
+          ].join('\n'),
         };
       }),
+
       {
         name: chalk.dim('← Back'),
         value: null,
@@ -201,25 +240,21 @@ export async function runDownloadCommand(
     validate: validateInstallDirectory,
   });
 
-  const destination = path.join(
-    MODELS_DIR,
-    installDirectory.trim(),
-  );
+  const destination = path.join(MODELS_DIR, installDirectory.trim());
 
   fs.mkdirSync(destination, {
     recursive: true,
   });
 
   const freeBytes = availableSpace(MODELS_DIR);
+
   const requiredBytes = selectedGroup.size;
 
   console.log();
   console.log(`${chalk.bold('Repository:')} ${repositoryId}`);
   console.log(`${chalk.bold('Selection:')} ${selectedGroup.label}`);
   console.log(`${chalk.bold('Destination:')} ${destination}`);
-  console.log(
-    `${chalk.bold('Free space:')} ${formatBytes(freeBytes)}`,
-  );
+  console.log(`${chalk.bold('Free space:')} ${formatBytes(freeBytes)}`);
 
   if (requiredBytes > 0) {
     console.log(
@@ -235,9 +270,7 @@ export async function runDownloadCommand(
       throw new Error(
         `Not enough storage. The download needs ${formatBytes(
           requiredBytes,
-        )}, plus a ${formatBytes(
-          safetyMargin,
-        )} safety margin.`,
+        )}, plus a ${formatBytes(safetyMargin)} safety margin.`,
       );
     }
   }
@@ -251,6 +284,7 @@ export async function runDownloadCommand(
 
   if (!shouldDownload) {
     console.log(chalk.dim('Download cancelled.'));
+
     return;
   }
 
@@ -263,17 +297,14 @@ export async function runDownloadCommand(
   });
 
   console.log();
-  console.log(
-    chalk.green.bold('Download completed successfully.'),
-  );
+  console.log(chalk.green.bold('Download completed successfully.'));
 
-  const firstRepositoryFile = [...selectedGroup.files]
-    .sort((a, b) => a.path.localeCompare(b.path))[0];
+  const firstRepositoryFile = [...selectedGroup.files].sort((a, b) =>
+    a.path.localeCompare(b.path),
+  )[0];
 
   if (!firstRepositoryFile) {
-    throw new Error(
-      'The selected model has no downloadable files.',
-    );
+    throw new Error('The selected model has no downloadable files.');
   }
 
   const downloadedModel = getDownloadedTarget(
@@ -283,9 +314,7 @@ export async function runDownloadCommand(
 
   console.log();
   console.log(
-    `${chalk.bold('Installed model:')} ${
-      downloadedModel.relativePath
-    }`,
+    `${chalk.bold('Installed model:')} ${downloadedModel.relativePath}`,
   );
 
   const shouldActivate = await confirm({
@@ -294,12 +323,12 @@ export async function runDownloadCommand(
   });
 
   if (!shouldActivate) {
-    console.log(
-      chalk.dim('The model was installed but not activated.'),
-    );
+    console.log(chalk.dim('The model was installed but not activated.'));
+
     return;
   }
 
   console.log();
+
   await activateModel(downloadedModel);
 }

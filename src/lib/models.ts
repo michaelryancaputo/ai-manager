@@ -18,9 +18,7 @@ export function getCurrentModel(): string | null {
   }
 }
 
-export function findModels(
-  directory: string = MODELS_DIR,
-): ModelInfo[] {
+export function findModels(directory: string = MODELS_DIR): ModelInfo[] {
   if (!fs.existsSync(directory)) {
     return [];
   }
@@ -41,10 +39,10 @@ export function findModels(
     }
 
     if (
-      entry.isFile()
-      && entry.name.toLowerCase().endsWith('.gguf')
-      && !entry.name.toLowerCase().startsWith('mmproj-')
-      && fullPath !== MODEL_LINK
+      entry.isFile() &&
+      entry.name.toLowerCase().endsWith('.gguf') &&
+      !entry.name.toLowerCase().startsWith('mmproj-') &&
+      fullPath !== MODEL_LINK
     ) {
       const stats = fs.statSync(fullPath);
 
@@ -56,9 +54,7 @@ export function findModels(
     }
   }
 
-  return results.sort((a, b) =>
-    a.relativePath.localeCompare(b.relativePath),
-  );
+  return results.sort((a, b) => a.relativePath.localeCompare(b.relativePath));
 }
 
 export function setCurrentModel(relativePath: string): void {
@@ -81,9 +77,7 @@ export function setCurrentModel(relativePath: string): void {
   fs.renameSync(temporaryLink, MODEL_LINK);
 }
 
-export function getModelByRelativePath(
-  relativePath: string,
-): ModelInfo | null {
+export function getModelByRelativePath(relativePath: string): ModelInfo | null {
   return (
     findModels().find(
       (model: ModelInfo) => model.relativePath === relativePath,

@@ -62,17 +62,14 @@ function formatNumber(value: number | null): string {
 }
 
 function average(values: Array<number | null>): number | null {
-  const available = values.filter(
-    (value): value is number => value !== null,
-  );
+  const available = values.filter((value): value is number => value !== null);
 
   if (available.length === 0) {
     return null;
   }
 
   return (
-    available.reduce((total, value) => total + value, 0)
-    / available.length
+    available.reduce((total, value) => total + value, 0) / available.length
   );
 }
 
@@ -115,24 +112,18 @@ async function runSingleBenchmark(
   const result = (await response.json()) as ChatCompletionResponse;
 
   const promptTokens =
-    result.usage?.prompt_tokens
-    ?? result.timings?.prompt_n
-    ?? 0;
+    result.usage?.prompt_tokens ?? result.timings?.prompt_n ?? 0;
 
   const completionTokens =
-    result.usage?.completion_tokens
-    ?? result.timings?.predicted_n
-    ?? 0;
+    result.usage?.completion_tokens ?? result.timings?.predicted_n ?? 0;
 
   return {
     name,
     elapsedMs,
     promptTokens,
     completionTokens,
-    promptTokensPerSecond:
-      result.timings?.prompt_per_second ?? null,
-    generationTokensPerSecond:
-      result.timings?.predicted_per_second ?? null,
+    promptTokensPerSecond: result.timings?.prompt_per_second ?? null,
+    generationTokensPerSecond: result.timings?.predicted_per_second ?? null,
   };
 }
 
@@ -176,12 +167,8 @@ export async function runBenchmarkCommand(): Promise<void> {
     console.log(
       `  Total time:       ${(result.elapsedMs / 1000).toFixed(2)} sec`,
     );
-    console.log(
-      `  Prompt tokens:    ${result.promptTokens}`,
-    );
-    console.log(
-      `  Completion tokens:${result.completionTokens}`,
-    );
+    console.log(`  Prompt tokens:    ${result.promptTokens}`);
+    console.log(`  Completion tokens:${result.completionTokens}`);
     console.log(
       `  Prompt speed:     ${formatNumber(
         result.promptTokensPerSecond,
@@ -196,15 +183,15 @@ export async function runBenchmarkCommand(): Promise<void> {
   }
 
   const averageElapsedMs =
-    results.reduce((total, result) => total + result.elapsedMs, 0)
-    / results.length;
+    results.reduce((total, result) => total + result.elapsedMs, 0) /
+    results.length;
 
   const averagePromptSpeed = average(
-    results.map(result => result.promptTokensPerSecond),
+    results.map((result) => result.promptTokensPerSecond),
   );
 
   const averageGenerationSpeed = average(
-    results.map(result => result.generationTokensPerSecond),
+    results.map((result) => result.generationTokensPerSecond),
   );
 
   console.log(chalk.bold.green('Average'));
@@ -212,14 +199,10 @@ export async function runBenchmarkCommand(): Promise<void> {
     `  Total time:       ${(averageElapsedMs / 1000).toFixed(2)} sec`,
   );
   console.log(
-    `  Prompt speed:     ${formatNumber(
-      averagePromptSpeed,
-    )} tokens/sec`,
+    `  Prompt speed:     ${formatNumber(averagePromptSpeed)} tokens/sec`,
   );
   console.log(
-    `  Generation speed: ${formatNumber(
-      averageGenerationSpeed,
-    )} tokens/sec`,
+    `  Generation speed: ${formatNumber(averageGenerationSpeed)} tokens/sec`,
   );
   console.log();
 }

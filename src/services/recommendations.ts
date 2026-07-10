@@ -1,13 +1,11 @@
-import type {
-  HuggingFaceModelGroup,
-} from '../types.js';
+import { optionalPositiveInteger, optionalPositiveNumber } from '../lib/env.js';
+
+import { quantizationName } from '../lib/huggingface.js';
+
+import type { HuggingFaceModelGroup } from '../types.js';
 
 export type FitLevel =
-  | 'excellent'
-  | 'good'
-  | 'borderline'
-  | 'partial-offload'
-  | 'unknown';
+  'excellent' | 'good' | 'borderline' | 'partial-offload' | 'unknown';
 
 export interface ModelRecommendation {
   score: number;
@@ -25,41 +23,15 @@ export interface RecommendationSettings {
 
 const GIB = 1024 ** 3;
 
-function positiveNumber(
-  value: string | undefined,
-  fallback: number,
-): number {
-  const parsed = Number.parseFloat(value ?? '');
+export function getRecommendationSettings(): RecommendationSettings {
+  const gpuVramGb = optionalPositiveNumber(process.env.AI_GPU_VRAM_GB, 16);
 
-  return Number.isFinite(parsed) && parsed > 0
-    ? parsed
-    : fallback;
-}
-
-function positiveInteger(
-  value: string | undefined,
-  fallback: number,
-): number {
-  const parsed = Number.parseInt(value ?? '', 10);
-
-  return Number.isInteger(parsed) && parsed > 0
-    ? parsed
-    : fallback;
-}
-
-export function getRecommendationSettings():
-RecommendationSettings {
-  const gpuVramGb = positiveNumber(
-    process.env.AI_GPU_VRAM_GB,
-    16,
-  );
-
-  const gpuHeadroomGb = positiveNumber(
+  const gpuHeadroomGb = optionalPositiveNumber(
     process.env.AI_GPU_HEADROOM_GB,
     2,
   );
 
-  const contextSize = positiveInteger(
+  const contextSize = optionalPositiveInteger(
     process.env.AI_CONTEXT_SIZE,
     8192,
   );
@@ -69,29 +41,6 @@ RecommendationSettings {
     gpuHeadroomBytes: gpuHeadroomGb * GIB,
     contextSize,
   };
-}
-
-function getQuantization(label: string): string {
-  const upper = label.toUpperCase();
-
-  const patterns = [
-    /UD-Q\d+_[A-Z0-9_]+/,
-    /IQ\d+_[A-Z0-9_]+/,
-    /Q\d+_[A-Z0-9_]+/,
-    /BF16/,
-    /FP16/,
-    /F16/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = upper.match(pattern);
-
-    if (match) {
-      return match[0];
-    }
-  }
-
-  return 'UNKNOWN';
 }
 
 function quantizationScore(quantization: string): number {
@@ -127,31 +76,20 @@ function estimateRuntimeMemory(
 ): number {
   const modelOverhead = modelSizeBytes * 0.1;
 
-  const contextMultiplier = Math.max(
-    1,
-    contextSize / 8192,
-  );
+  const contextMultiplier = Math.max(1, contextSize / 8192);
 
-  const contextReserve =
-    1.25 * GIB * contextMultiplier;
+  const contextReserve = 1.25 * GIB * contextMultiplier;
 
-  return Math.ceil(
-    modelSizeBytes
-    + modelOverhead
-    + contextReserve,
-  );
+  return Math.ceil(modelSizeBytes + modelOverhead + contextReserve);
 }
 
-function determineFit(
+export function determineFit(
   estimatedMemoryBytes: number,
   settings: RecommendationSettings,
 ): FitLevel {
-  const usableVram =
-    settings.gpuVramBytes
-    - settings.gpuHeadroomBytes;
+  const usableVram = settings.gpuVramBytes - settings.gpuHeadroomBytes;
 
-  const utilization =
-    estimatedMemoryBytes / usableVram;
+  const utilization = estimatedMemoryBytes / usableVram;
 
   if (utilization <= 0.7) {
     return 'excellent';
@@ -210,7 +148,7 @@ export function recommendModel(
   group: HuggingFaceModelGroup,
   settings = getRecommendationSettings(),
 ): ModelRecommendation {
-  const quantization = getQuantization(group.label);
+  const quantization = quantizationName(group.label);
 
   if (group.size <= 0) {
     return {
@@ -222,20 +160,14 @@ export function recommendModel(
     };
   }
 
-  const estimatedMemoryBytes =
-    estimateRuntimeMemory(
-      group.size,
-      settings.contextSize,
-    );
-
-  const fit = determineFit(
-    estimatedMemoryBytes,
-    settings,
+  const estimatedMemoryBytes = estimateRuntimeMemory(
+    group.size,
+    settings.contextSize,
   );
 
-  const score =
-    fitScore(fit) * 0.7
-    + quantizationScore(quantization) * 0.3;
+  const fit = determineFit(estimatedMemoryBytes, settings);
+
+  const score = fitScore(fit) * 0.7 + quantizationScore(quantization) * 0.3;
 
   return {
     score,
@@ -254,25 +186,16 @@ export function rankModelRecommendations(
   recommendation: ModelRecommendation;
 }> {
   const ranked = groups
-    .map(group => ({
+    .map((group) => ({
       group,
-      recommendation: recommendModel(
-        group,
-        settings,
-      ),
+      recommendation: recommendModel(group, settings),
     }))
-    .sort(
-      (a, b) =>
-        b.recommendation.score
-        - a.recommendation.score,
-    );
+    .sort((a, b) => b.recommendation.score - a.recommendation.score);
 
   const bestViable = ranked.find(
-    item =>
-      item.recommendation.fit
-        === 'excellent'
-      || item.recommendation.fit
-        === 'good',
+    (item) =>
+      item.recommendation.fit === 'excellent' ||
+      item.recommendation.fit === 'good',
   );
 
   if (bestViable) {

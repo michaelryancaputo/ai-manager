@@ -7,11 +7,14 @@
     "manager": "./dist/ai-manager.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
-    "dev": "tsx src/ai-manager.ts"
+    "dev": "tsx src/ai-manager.ts",
+    "test": "vitest run",
+    "lint": "eslint .",
+    "format": "prettier --write ."
   },
   "keywords": [
     "llama.cpp",
@@ -30,7 +33,12 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
+    "eslint": "^10.6.0",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.9.5",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
   }
 }

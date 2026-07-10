@@ -1,29 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import {
-  confirm,
-  select,
-} from '@inquirer/prompts';
+import { confirm, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 
-import {
-  MODELS_DIR,
-} from '../config.js';
+import { MODELS_DIR } from '../config.js';
 
-import {
-  findModels,
-  getCurrentModel,
-} from '../lib/models.js';
+import { findModels, getCurrentModel } from '../lib/models.js';
 
-import {
-  formatBytes,
-  friendlyModelName,
-} from '../lib/ui.js';
+import { formatBytes, friendlyModelName } from '../lib/ui.js';
 
-import type {
-  ModelInfo,
-} from '../types.js';
+import type { ModelInfo } from '../types.js';
 
 interface DeleteChoice {
   model: ModelInfo;
@@ -48,19 +35,17 @@ function directorySize(targetPath: string): number {
   for (const entry of fs.readdirSync(targetPath, {
     withFileTypes: true,
   })) {
-    total += directorySize(
-      path.join(targetPath, entry.name),
-    );
+    total += directorySize(path.join(targetPath, entry.name));
   }
 
   return total;
 }
 
-function isShard(filename: string): boolean {
+export function isShard(filename: string): boolean {
   return /-\d{5}-of-\d{5}\.gguf$/i.test(filename);
 }
 
-function getDeleteTarget(model: ModelInfo): DeleteChoice {
+export function getDeleteTarget(model: ModelInfo): DeleteChoice {
   const modelDirectory = path.dirname(model.fullPath);
   const filename = path.basename(model.fullPath);
 
@@ -72,10 +57,7 @@ function getDeleteTarget(model: ModelInfo): DeleteChoice {
     return {
       model,
       deletePath: modelDirectory,
-      displayPath: path.relative(
-        MODELS_DIR,
-        modelDirectory,
-      ),
+      displayPath: path.relative(MODELS_DIR, modelDirectory),
       size: directorySize(modelDirectory),
     };
   }
@@ -99,23 +81,18 @@ function uniqueDeleteChoices(models: ModelInfo[]): DeleteChoice[] {
     }
   }
 
-  return [...seen.values()].sort(
-    (a, b) =>
-      a.displayPath.localeCompare(
-        b.displayPath,
-      ),
+  return [...seen.values()].sort((a, b) =>
+    a.displayPath.localeCompare(b.displayPath),
   );
 }
 
-function removeTarget(targetPath: string): void {
+export function removeTarget(targetPath: string): void {
   const resolvedModelsDir = fs.realpathSync(MODELS_DIR);
   const resolvedTarget = fs.realpathSync(targetPath);
 
   if (
-    resolvedTarget === resolvedModelsDir
-    || !resolvedTarget.startsWith(
-      `${resolvedModelsDir}${path.sep}`,
-    )
+    resolvedTarget === resolvedModelsDir ||
+    !resolvedTarget.startsWith(`${resolvedModelsDir}${path.sep}`)
   ) {
     throw new Error(
       `Refusing to delete path outside the models directory: ${resolvedTarget}`,
@@ -134,19 +111,11 @@ export async function runDeleteCommand(): Promise<void> {
 
   console.log();
   console.log(chalk.bold.cyan('Delete Model'));
-  console.log(
-    chalk.dim(
-      '────────────────────────────────────────',
-    ),
-  );
+  console.log(chalk.dim('────────────────────────────────────────'));
   console.log();
 
   if (models.length === 0) {
-    console.log(
-      chalk.yellow(
-        'No installed models were found.',
-      ),
-    );
+    console.log(chalk.yellow('No installed models were found.'));
     return;
   }
 
@@ -156,33 +125,20 @@ export async function runDeleteCommand(): Promise<void> {
     message: 'Select a model to delete',
     pageSize: 15,
     choices: [
-      ...choices.map(choice => {
-        const isActive =
-          choice.model.relativePath === current;
+      ...choices.map((choice) => {
+        const isActive = choice.model.relativePath === current;
 
         return {
           name: [
-            isActive
-              ? chalk.yellow('●')
-              : chalk.dim('○'),
+            isActive ? chalk.yellow('●') : chalk.dim('○'),
 
             isActive
-              ? chalk.yellow(
-                friendlyModelName(
-                  choice.model.relativePath,
-                ),
-              )
-              : friendlyModelName(
-                choice.model.relativePath,
-              ),
+              ? chalk.yellow(friendlyModelName(choice.model.relativePath))
+              : friendlyModelName(choice.model.relativePath),
 
-            chalk.dim(
-              formatBytes(choice.size),
-            ),
+            chalk.dim(formatBytes(choice.size)),
 
-            isActive
-              ? chalk.red('active')
-              : '',
+            isActive ? chalk.red('active') : '',
           ]
             .filter(Boolean)
             .join('  '),
@@ -202,71 +158,41 @@ export async function runDeleteCommand(): Promise<void> {
     return;
   }
 
-  const isActive =
-    selected.model.relativePath === current;
+  const isActive = selected.model.relativePath === current;
 
   if (isActive) {
     console.log();
-    console.log(
-      chalk.red.bold(
-        'The selected model is currently active.',
-      ),
-    );
-    console.log(
-      chalk.yellow(
-        'Switch to another model before deleting it.',
-      ),
-    );
+    console.log(chalk.red.bold('The selected model is currently active.'));
+    console.log(chalk.yellow('Switch to another model before deleting it.'));
     return;
   }
 
   console.log();
   console.log(
-    `${chalk.bold('Model:')} ${
-      friendlyModelName(
-        selected.model.relativePath,
-      )
-    }`,
+    `${chalk.bold('Model:')} ${friendlyModelName(selected.model.relativePath)}`,
   );
+  console.log(`${chalk.bold('Path:')} ${selected.displayPath}`);
   console.log(
-    `${chalk.bold('Path:')} ${
-      selected.displayPath
-    }`,
-  );
-  console.log(
-    `${chalk.bold('Space reclaimed:')} ${
-      formatBytes(selected.size)
-    }`,
+    `${chalk.bold('Space reclaimed:')} ${formatBytes(selected.size)}`,
   );
 
   console.log();
 
   const approved = await confirm({
-    message:
-      'Permanently delete this model?',
+    message: 'Permanently delete this model?',
     default: false,
   });
 
   if (!approved) {
-    console.log(
-      chalk.dim('Deletion cancelled.'),
-    );
+    console.log(chalk.dim('Deletion cancelled.'));
     return;
   }
 
   removeTarget(selected.deletePath);
 
   console.log();
+  console.log(chalk.green.bold(`Deleted ${selected.displayPath}`));
   console.log(
-    chalk.green.bold(
-      `Deleted ${selected.displayPath}`,
-    ),
-  );
-  console.log(
-    chalk.green(
-      `Reclaimed approximately ${formatBytes(
-        selected.size,
-      )}.`,
-    ),
+    chalk.green(`Reclaimed approximately ${formatBytes(selected.size)}.`),
   );
 }

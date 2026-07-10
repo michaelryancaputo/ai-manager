@@ -7,7 +7,7 @@ const srcDirectory = path.dirname(currentFile);
 const projectDirectory = path.resolve(srcDirectory, '..');
 const envPath = path.join(projectDirectory, '.env');
 
-dotenv.config({ path: envPath });
+dotenv.config({ path: envPath, quiet: true });
 
 function required(name: string): string {
   const value = process.env[name]?.trim();

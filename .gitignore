@@ -25,3 +25,10 @@ tmp/
 
 # npm
 npm-debug.log*
+*.log
+
+# Build output
+dist/
+
+# VS Code
+.vscode/

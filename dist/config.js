@@ -5,13 +5,13 @@ const currentFile = fileURLToPath(import.meta.url);
 const srcDirectory = path.dirname(currentFile);
 const projectDirectory = path.resolve(srcDirectory, '..');
 const envPath = path.join(projectDirectory, '.env');
-dotenv.config({ path: envPath });
+dotenv.config({ path: envPath, quiet: true });
 function required(name) {
     const value = process.env[name]?.trim();
     if (!value) {
         throw new Error(`Missing required environment variable: ${name}\n` +
             `Expected configuration file: ${envPath}\n` +
-            `Copy .env.example to .env and configure it.`);
+            'Copy .env.example to .env and configure it.');
     }
     return value;
 }
@@ -30,5 +30,5 @@ export const MODEL_LINK = required('AI_MODEL_LINK');
 export const SERVICE = required('AI_COMPOSE_SERVICE');
 export const CONTAINER = required('AI_CONTAINER_NAME');
 export const API_URL = required('AI_API_URL');
-export const HEALTH_TIMEOUT_MS = positiveInteger('AI_HEALTH_TIMEOUT_MS', 120000);
+export const HEALTH_TIMEOUT_MS = positiveInteger('AI_HEALTH_TIMEOUT_MS', 120_000);
 //# sourceMappingURL=config.js.map

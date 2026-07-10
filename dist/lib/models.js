@@ -18,13 +18,14 @@ export function findModels(directory = MODELS_DIR) {
         return [];
     }
     const results = [];
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(directory, {
+        withFileTypes: true,
+    })) {
         const fullPath = path.join(directory, entry.name);
         if (entry.isDirectory()) {
-            if (entry.name === '.cache') {
-                continue;
+            if (entry.name !== '.cache') {
+                results.push(...findModels(fullPath));
             }
-            results.push(...findModels(fullPath));
             continue;
         }
         if (entry.isFile()
@@ -51,13 +52,13 @@ export function setCurrentModel(relativePath) {
         fs.unlinkSync(temporaryLink);
     }
     catch {
-        // Temporary link does not exist.
+        // The temporary link does not exist.
     }
-    // Keep this relative so the symlink also resolves inside /models in Docker.
+    // A relative link resolves both on the host and inside /models in Docker.
     fs.symlinkSync(relativePath, temporaryLink);
     fs.renameSync(temporaryLink, MODEL_LINK);
 }
 export function getModelByRelativePath(relativePath) {
-    return findModels().find(model => model.relativePath === relativePath) ?? null;
+    return (findModels().find((model) => model.relativePath === relativePath) ?? null);
 }
 //# sourceMappingURL=models.js.map

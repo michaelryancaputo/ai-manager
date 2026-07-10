@@ -7,11 +7,11 @@
     "manager": "./dist/ai-manager.js"
   },
   "scripts": {
-    "dev": "tsx src/ai-manager.ts",
     "build": "tsc",
-    "start": "node dist/ai-manager.js",
     "typecheck": "tsc --noEmit",
-    "prepare": "npm run build"
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build",
+    "dev": "tsx src/ai-manager.ts"
   },
   "keywords": [
     "llama.cpp",
@@ -22,6 +22,7 @@
   "license": "MIT",
   "dependencies": {
     "@inquirer/input": "^4.2.2",
+    "@inquirer/prompts": "^8.5.2",
     "@inquirer/select": "^5.2.1",
     "chalk": "^5.6.2",
     "dotenv": "^17.2.3",

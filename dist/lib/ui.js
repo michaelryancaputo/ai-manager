@@ -1,3 +1,4 @@
+import path from 'node:path';
 import chalk from 'chalk';
 export function printTitle() {
     console.log();
@@ -13,14 +14,12 @@ export function formatBytes(bytes) {
         unitIndex += 1;
     }
     const decimalPlaces = unitIndex >= 3 ? 1 : 0;
-    return `${value.toFixed(decimalPlaces)} ${units[unitIndex]}`;
+    const unit = units[unitIndex] ?? 'B';
+    return `${value.toFixed(decimalPlaces)} ${unit}`;
 }
 export function friendlyModelName(relativePath) {
-    const filename = relativePath
-        .split('/')
-        .at(-1)
-        .replace(/\.gguf$/i, '');
-    return filename
+    return path
+        .basename(relativePath, '.gguf')
         .replaceAll('_', ' ')
         .replaceAll('-', ' ');
 }

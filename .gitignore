@@ -1,0 +1,27 @@
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Models and large model files
+models/
+*.gguf
+*.safetensors
+*.bin
+
+# Logs and runtime files
+*.log
+*.pid
+.cache/
+tmp/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+# npm
+npm-debug.log*

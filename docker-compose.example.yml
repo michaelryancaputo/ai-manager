@@ -1,0 +1,45 @@
+# Copy this file to docker-compose.yml in the directory pointed to by
+# AI_COMPOSE_DIR, then adjust it for your hardware. This example targets an
+# Intel Arc GPU via oneAPI/SYCL — see
+# https://github.com/ggml-org/llama.cpp/blob/master/docs/docker.md for CUDA,
+# ROCm, Vulkan, and CPU-only image tags and their required device/env blocks.
+
+services:
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-intel
+    container_name: llama-cpp-intel
+    restart: unless-stopped
+    ports:
+      - '8080:8080'
+    # Intel GPU passthrough. Remove for CPU-only, or replace with the
+    # device/runtime settings your backend needs (e.g. --gpus all for CUDA).
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - '44'
+      - '992'
+    volumes:
+      # Host path must match AI_MODELS_DIR.
+      - ./models:/models
+    environment:
+      ONEAPI_DEVICE_SELECTOR: level_zero:0
+      ZES_ENABLE_SYSMAN: '1'
+      SYCL_PI_LEVEL_ZERO_USE_IMMEDIATE_COMMANDLISTS: '1'
+    command:
+      - '--host'
+      - '0.0.0.0'
+      - '--port'
+      - '8080'
+      # Must match AI_MODEL_LINK's filename, relative to AI_MODELS_DIR.
+      - '--model'
+      - '/models/model.gguf'
+      - '--ctx-size'
+      - '8192'
+      - '--n-gpu-layers'
+      - '40'
+      - '--flash-attn'
+      - 'off'
+      - '--parallel'
+      - '1'
+      - '--reasoning'
+      - 'off'

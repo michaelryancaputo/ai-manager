@@ -33,11 +33,14 @@ import {
 
 import { runDownloadCommand } from './commands/download.js';
 
+import { runSuggestedModelsCommand } from './commands/suggested.js';
+
 import {
   benchmarkModels,
   printComparisonTable,
   runBenchmarkCommand,
   runCompareModelsCommand,
+  selectBenchmarkTypes,
 } from './commands/benchmark.js';
 
 import {
@@ -242,9 +245,23 @@ async function switchModelInteractive(target: ModelInfo): Promise<boolean> {
     return switchModel(target);
   }
 
-  const entries = await benchmarkModels([currentModel, target], switchModel);
+  console.log();
 
-  printComparisonTable(entries);
+  const benchmarks = await selectBenchmarkTypes();
+
+  if (benchmarks.length === 0) {
+    console.log(chalk.yellow('No benchmark types selected — switching without comparing.'));
+
+    return switchModel(target);
+  }
+
+  const entries = await benchmarkModels(
+    [currentModel, target],
+    switchModel,
+    benchmarks,
+  );
+
+  printComparisonTable(entries, benchmarks);
 
   console.log();
 
@@ -522,6 +539,10 @@ async function mainMenu(): Promise<void> {
           value: 'download',
         },
         {
+          name: 'Suggested models for your hardware',
+          value: 'suggested',
+        },
+        {
           name: 'Delete model',
           value: 'delete',
         },
@@ -561,6 +582,16 @@ async function mainMenu(): Promise<void> {
         clearScreen();
 
         await runMenuAction(() => runDownloadCommand(switchModelInteractive));
+
+        await pause();
+        break;
+
+      case 'suggested':
+        clearScreen();
+
+        await runMenuAction(() =>
+          runSuggestedModelsCommand(switchModelInteractive),
+        );
 
         await pause();
         break;
@@ -631,6 +662,7 @@ ${chalk.bold('Usage')}
   manager                Open the main menu
   manager switch         Open the model selector
   manager download       Download a Hugging Face model
+  manager suggested      Browse suggested models for your hardware
   manager delete         Delete an installed model
   manager remove         Alias for delete
   manager rm             Alias for delete
@@ -663,6 +695,10 @@ async function main(): Promise<void> {
 
     case 'download':
       await runDownloadCommand(switchModelInteractive);
+      break;
+
+    case 'suggested':
+      await runSuggestedModelsCommand(switchModelInteractive);
       break;
 
     case 'delete':

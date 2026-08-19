@@ -28,7 +28,7 @@ import {
 
 import type { HuggingFaceModelGroup, ModelInfo } from '../types.js';
 
-type ActivateModel = (model: ModelInfo) => Promise<boolean>;
+export type ActivateModel = (model: ModelInfo) => Promise<boolean>;
 
 function availableSpace(directory: string): number {
   const stats = fs.statfsSync(directory);
@@ -160,6 +160,13 @@ export async function runDownloadCommand(
 
   const repositoryId = parseRepositoryId(repositoryInput);
 
+  await downloadRepository(repositoryId, activateModel);
+}
+
+export async function downloadRepository(
+  repositoryId: string,
+  activateModel: ActivateModel,
+): Promise<void> {
   const groups = await inspectRepository(repositoryId);
 
   if (!groups) {

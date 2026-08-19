@@ -12,6 +12,10 @@ import {
 
 import { formatBytes, friendlyModelName } from '../lib/ui.js';
 
+import { TASK_LABELS } from '../services/catalog.js';
+
+import type { ModelTask } from '../services/catalog.js';
+
 import type { ModelInfo } from '../types.js';
 
 type SwitchModel = (model: ModelInfo) => Promise<boolean>;
@@ -53,26 +57,81 @@ interface BenchmarkResult {
   generationTokensPerSecond: number | null;
 }
 
-const BENCHMARKS = [
+/**
+ * A tiny (135 byte) three-color-stripe PNG used as the vision benchmark's
+ * input image. Its content doesn't matter — the benchmark measures
+ * multimodal request handling and generation speed, not description
+ * accuracy.
+ */
+const TEST_IMAGE_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAAAwCAIAAAAuKetIAAAATklEQVR42u3PMQ0AMAgAMOQgZ/d0Tg5i5gEukiY10KjM1UJAQEBAQEBAQEBAoB3Id1YTEBAQEBAQEBAQEBgEbq0mICAgICAgICAgIND2AXRa2NP7KV6DAAAAAElFTkSuQmCC';
+
+interface BenchmarkDefinition {
+  name: string;
+  task: ModelTask;
+  prompt: string;
+  maxTokens: number;
+  image?: string;
+}
+
+const BENCHMARKS: BenchmarkDefinition[] = [
   {
-    name: 'Reasoning',
+    name: 'Chat',
+    task: 'chat',
     prompt:
-      'A farmer has 17 sheep. All but 9 run away. How many sheep remain? Explain briefly.',
+      'Summarize this in one sentence: Local language models provide privacy and control, but require users to manage hardware, model files, inference software, and performance tradeoffs.',
     maxTokens: 128,
   },
   {
     name: 'Coding',
+    task: 'coding',
     prompt:
       'Write a concise TypeScript function that removes duplicate strings from an array while preserving order.',
     maxTokens: 256,
   },
   {
-    name: 'Summarization',
+    name: 'Vision',
+    task: 'vision',
+    prompt: 'Describe what you see in this image in one sentence.',
+    maxTokens: 128,
+    image: TEST_IMAGE_DATA_URL,
+  },
+  {
+    name: 'Reasoning',
+    task: 'reasoning',
     prompt:
-      'Summarize this in one sentence: Local language models provide privacy and control, but require users to manage hardware, model files, inference software, and performance tradeoffs.',
+      'A farmer has 17 sheep. All but 9 run away. How many sheep remain? Explain briefly.',
     maxTokens: 128,
   },
-] as const;
+];
+
+function benchmarkTasks(): ModelTask[] {
+  const seen = new Set<ModelTask>();
+  const tasks: ModelTask[] = [];
+
+  for (const benchmark of BENCHMARKS) {
+    if (!seen.has(benchmark.task)) {
+      seen.add(benchmark.task);
+      tasks.push(benchmark.task);
+    }
+  }
+
+  return tasks;
+}
+
+export async function selectBenchmarkTypes(): Promise<BenchmarkDefinition[]> {
+  const selectedTasks = await checkbox<ModelTask>({
+    message: 'Select benchmark types to run (space to toggle, enter to confirm)',
+    pageSize: 15,
+    choices: benchmarkTasks().map((task) => ({
+      name: TASK_LABELS[task],
+      value: task,
+      checked: true,
+    })),
+  });
+
+  return BENCHMARKS.filter((benchmark) => selectedTasks.includes(benchmark.task));
+}
 
 function formatNumber(value: number | null): string {
   return value === null ? 'n/a' : value.toFixed(2);
@@ -91,11 +150,16 @@ function average(values: Array<number | null>): number | null {
 }
 
 async function runSingleBenchmark(
-  name: string,
-  prompt: string,
-  maxTokens: number,
+  benchmark: BenchmarkDefinition,
 ): Promise<BenchmarkResult> {
   const startedAt = performance.now();
+
+  const content = benchmark.image
+    ? [
+        { type: 'text', text: benchmark.prompt },
+        { type: 'image_url', image_url: { url: benchmark.image } },
+      ]
+    : benchmark.prompt;
 
   const response = await fetch(`${API_URL}/v1/chat/completions`, {
     method: 'POST',
@@ -107,11 +171,11 @@ async function runSingleBenchmark(
       messages: [
         {
           role: 'user',
-          content: prompt,
+          content,
         },
       ],
       temperature: 0,
-      max_tokens: maxTokens,
+      max_tokens: benchmark.maxTokens,
       stream: false,
     }),
   });
@@ -135,7 +199,7 @@ async function runSingleBenchmark(
     result.usage?.completion_tokens ?? result.timings?.predicted_n ?? 0;
 
   return {
-    name,
+    name: benchmark.name,
     elapsedMs,
     promptTokens,
     completionTokens,
@@ -144,18 +208,16 @@ async function runSingleBenchmark(
   };
 }
 
-async function runBenchmarkSuite(): Promise<BenchmarkResult[]> {
+async function runBenchmarkSuite(
+  benchmarks: BenchmarkDefinition[],
+): Promise<BenchmarkResult[]> {
   const results: BenchmarkResult[] = [];
 
-  for (const benchmark of BENCHMARKS) {
+  for (const benchmark of benchmarks) {
     const spinner = ora(`Running ${benchmark.name} benchmark`).start();
 
     try {
-      const result = await runSingleBenchmark(
-        benchmark.name,
-        benchmark.prompt,
-        benchmark.maxTokens,
-      );
+      const result = await runSingleBenchmark(benchmark);
 
       results.push(result);
 
@@ -165,8 +227,7 @@ async function runBenchmarkSuite(): Promise<BenchmarkResult[]> {
         )} tokens/sec`,
       );
     } catch (error: unknown) {
-      spinner.fail(`${benchmark.name} benchmark failed`);
-      throw error;
+      spinner.fail(`${benchmark.name} benchmark failed: ${errorMessage(error)}`);
     }
   }
 
@@ -179,7 +240,24 @@ export async function runBenchmarkCommand(): Promise<void> {
   console.log(chalk.dim('────────────────────────────────────────'));
   console.log();
 
-  const results = await runBenchmarkSuite();
+  const benchmarks = await selectBenchmarkTypes();
+
+  if (benchmarks.length === 0) {
+    console.log(chalk.yellow('No benchmark types selected.'));
+
+    return;
+  }
+
+  console.log();
+
+  const results = await runBenchmarkSuite(benchmarks);
+
+  if (results.length === 0) {
+    console.log();
+    console.log(chalk.red('No benchmarks completed successfully.'));
+
+    return;
+  }
 
   console.log();
   console.log(chalk.bold('Results'));
@@ -271,7 +349,10 @@ export function printTable(headers: string[], rows: string[][]): void {
   }
 }
 
-export function printComparisonTable(entries: ModelBenchmark[]): void {
+export function printComparisonTable(
+  entries: ModelBenchmark[],
+  benchmarks: BenchmarkDefinition[] = BENCHMARKS,
+): void {
   const compared = entries.filter(
     (entry): entry is ModelBenchmark & { results: BenchmarkResult[] } =>
       entry.results !== null,
@@ -293,7 +374,7 @@ export function printComparisonTable(entries: ModelBenchmark[]): void {
     ...entries.map((entry) => formatBytes(entry.model.size)),
   ];
 
-  const metricRows = BENCHMARKS.map((benchmark) => [
+  const metricRows = benchmarks.map((benchmark) => [
     `${benchmark.name} (tok/s)`,
     ...entries.map((entry) => {
       const result = entry.results?.find(
@@ -330,6 +411,7 @@ export function printComparisonTable(entries: ModelBenchmark[]): void {
 export async function benchmarkModels(
   models: ModelInfo[],
   switchModel: SwitchModel,
+  benchmarks: BenchmarkDefinition[] = BENCHMARKS,
 ): Promise<ModelBenchmark[]> {
   const entries: ModelBenchmark[] = [];
 
@@ -351,7 +433,7 @@ export async function benchmarkModels(
     }
 
     try {
-      const results = await runBenchmarkSuite();
+      const results = await runBenchmarkSuite(benchmarks);
 
       entries.push({ model, results });
     } catch (error: unknown) {
@@ -407,11 +489,21 @@ export async function runCompareModelsCommand(
     return;
   }
 
+  console.log();
+
+  const benchmarks = await selectBenchmarkTypes();
+
+  if (benchmarks.length === 0) {
+    console.log(chalk.yellow('No benchmark types selected.'));
+
+    return;
+  }
+
   const originalModel = currentPath
     ? getModelByRelativePath(currentPath)
     : null;
 
-  const entries = await benchmarkModels(selected, switchModel);
+  const entries = await benchmarkModels(selected, switchModel, benchmarks);
 
   if (originalModel && getCurrentModel() !== originalModel.relativePath) {
     console.log();
@@ -422,5 +514,5 @@ export async function runCompareModelsCommand(
     await switchModel(originalModel);
   }
 
-  printComparisonTable(entries);
+  printComparisonTable(entries, benchmarks);
 }

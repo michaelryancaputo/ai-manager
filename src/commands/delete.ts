@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { confirm, select } from '@inquirer/prompts';
+import { confirm, search } from '@inquirer/prompts';
 import chalk from 'chalk';
 
 import { MODELS_DIR } from '../config.js';
 
 import { findModels, getCurrentModel } from '../lib/models.js';
 
-import { formatBytes, friendlyModelName } from '../lib/ui.js';
+import { formatBytes, friendlyModelName, matchesSearchTerm } from '../lib/ui.js';
 
 import type { ModelInfo } from '../types.js';
 
@@ -121,37 +121,49 @@ export async function runDeleteCommand(): Promise<void> {
 
   const choices = uniqueDeleteChoices(models);
 
-  const selected = await select<DeleteChoice | null>({
-    message: 'Select a model to delete',
+  const selected = await search<DeleteChoice | null>({
+    message: 'Select a model to delete (type to search)',
     pageSize: 15,
-    choices: [
-      ...choices.map((choice) => {
-        const isActive = choice.model.relativePath === current;
+    source: (term) => {
+      const filtered = term
+        ? choices.filter((choice) =>
+            matchesSearchTerm(
+              term,
+              friendlyModelName(choice.model.relativePath),
+              choice.displayPath,
+            ),
+          )
+        : choices;
 
-        return {
-          name: [
-            isActive ? chalk.yellow('●') : chalk.dim('○'),
+      return [
+        ...filtered.map((choice) => {
+          const isActive = choice.model.relativePath === current;
 
-            isActive
-              ? chalk.yellow(friendlyModelName(choice.model.relativePath))
-              : friendlyModelName(choice.model.relativePath),
+          return {
+            name: [
+              isActive ? chalk.yellow('●') : chalk.dim('○'),
 
-            chalk.dim(formatBytes(choice.size)),
+              isActive
+                ? chalk.yellow(friendlyModelName(choice.model.relativePath))
+                : friendlyModelName(choice.model.relativePath),
 
-            isActive ? chalk.red('active') : '',
-          ]
-            .filter(Boolean)
-            .join('  '),
+              chalk.dim(formatBytes(choice.size)),
 
-          value: choice,
-          description: choice.displayPath,
-        };
-      }),
-      {
-        name: chalk.dim('← Back'),
-        value: null,
-      },
-    ],
+              isActive ? chalk.red('active') : '',
+            ]
+              .filter(Boolean)
+              .join('  '),
+
+            value: choice,
+            description: choice.displayPath,
+          };
+        }),
+        {
+          name: chalk.dim('← Back'),
+          value: null,
+        },
+      ];
+    },
   });
 
   if (!selected) {

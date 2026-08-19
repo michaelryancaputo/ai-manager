@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { confirm, input, select } from '@inquirer/prompts';
+import { confirm, input, search } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -19,9 +19,12 @@ import {
   runHuggingFaceLogin,
 } from '../lib/huggingface.js';
 
-import { formatBytes } from '../lib/ui.js';
+import { formatBytes, matchesSearchTerm } from '../lib/ui.js';
 
-import { rankModelRecommendations } from '../services/recommendations.js';
+import {
+  getRecommendationSettings,
+  rankModelRecommendations,
+} from '../services/recommendations.js';
 
 import type { HuggingFaceModelGroup, ModelInfo } from '../types.js';
 
@@ -142,26 +145,6 @@ export async function runDownloadCommand(
   console.log(chalk.dim('────────────────────────────────────────'));
   console.log();
 
-  const startAction = await select<'repository' | 'back'>({
-    message: 'Choose an action',
-    choices: [
-      {
-        name: 'Enter a Hugging Face repository or URL',
-        value: 'repository',
-      },
-      {
-        name: chalk.dim('← Back'),
-        value: 'back',
-      },
-    ],
-  });
-
-  if (startAction === 'back') {
-    return;
-  }
-
-  console.log();
-
   const repositoryInput = await input({
     message: 'Hugging Face repository or URL',
 
@@ -187,43 +170,69 @@ export async function runDownloadCommand(
 
   const rankedGroups = rankModelRecommendations(groups);
 
-  const selectedGroup = await select<HuggingFaceModelGroup | null>({
-    message: 'Select a model',
+  const hasRecommendation = rankedGroups.some(
+    ({ recommendation }) => recommendation.recommended,
+  );
+
+  if (!hasRecommendation) {
+    const settings = getRecommendationSettings();
+
+    console.log(
+      chalk.yellow(
+        `None of these options are expected to fit comfortably in your ` +
+          `configured GPU (${formatBytes(settings.gpuVramBytes)} VRAM, ` +
+          `${settings.contextSize} context). Expect slower performance or ` +
+          'CPU offload.',
+      ),
+    );
+    console.log();
+  }
+
+  const selectedGroup = await search<HuggingFaceModelGroup | null>({
+    message: 'Select a model (type to search)',
     pageSize: 15,
-    choices: [
-      ...rankedGroups.map(({ group, recommendation }) => {
-        const quantization = quantizationName(group.label);
+    source: (term) => {
+      const filtered = term
+        ? rankedGroups.filter(({ group }) =>
+            matchesSearchTerm(term, group.label, quantizationName(group.label)),
+          )
+        : rankedGroups;
 
-        return {
-          name: [
-            group.label,
-            chalk.cyan(quantization),
+      return [
+        ...filtered.map(({ group, recommendation }) => {
+          const quantization = quantizationName(group.label);
 
-            group.size > 0
-              ? chalk.dim(formatBytes(group.size))
-              : chalk.dim('size unknown'),
+          return {
+            name: [
+              group.label,
+              chalk.cyan(quantization),
 
-            recommendation.recommended ? chalk.green('recommended') : '',
+              group.size > 0
+                ? chalk.dim(formatBytes(group.size))
+                : chalk.dim('size unknown'),
 
-            group.sharded ? chalk.yellow(`${group.files.length} shards`) : '',
-          ]
-            .filter(Boolean)
-            .join('  '),
+              recommendation.recommended ? chalk.green('recommended') : '',
 
-          value: group,
+              group.sharded ? chalk.yellow(`${group.files.length} shards`) : '',
+            ]
+              .filter(Boolean)
+              .join('  '),
 
-          description: [
-            ...group.files.map((file) => file.path),
-            recommendation.summary,
-          ].join('\n'),
-        };
-      }),
+            value: group,
 
-      {
-        name: chalk.dim('← Back'),
-        value: null,
-      },
-    ],
+            description: [
+              ...group.files.map((file) => file.path),
+              recommendation.summary,
+            ].join('\n'),
+          };
+        }),
+
+        {
+          name: chalk.dim('← Back'),
+          value: null,
+        },
+      ];
+    },
   });
 
   if (!selectedGroup) {

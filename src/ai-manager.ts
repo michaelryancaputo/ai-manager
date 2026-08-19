@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { input, select } from '@inquirer/prompts';
+import { confirm, input, search, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 import ora from 'ora';
 
@@ -17,15 +17,34 @@ import {
   SERVICE,
 } from './config.js';
 
-import { findModels, getCurrentModel, setCurrentModel } from './lib/models.js';
+import {
+  findModels,
+  getCurrentModel,
+  getModelByRelativePath,
+  setCurrentModel,
+} from './lib/models.js';
 
-import { formatBytes, friendlyModelName, printTitle } from './lib/ui.js';
+import {
+  formatBytes,
+  friendlyModelName,
+  matchesSearchTerm,
+  printTitle,
+} from './lib/ui.js';
 
 import { runDownloadCommand } from './commands/download.js';
 
-import { runBenchmarkCommand } from './commands/benchmark.js';
+import {
+  benchmarkModels,
+  printComparisonTable,
+  runBenchmarkCommand,
+  runCompareModelsCommand,
+} from './commands/benchmark.js';
 
-import { runDeleteCommand } from './commands/delete.js';
+import {
+  getDeleteTarget,
+  removeTarget,
+  runDeleteCommand,
+} from './commands/delete.js';
 
 import type { ModelInfo, RunOptions } from './types.js';
 
@@ -33,6 +52,31 @@ const execFileAsync = promisify(execFile);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isCancellation(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return (
+    error.name === 'ExitPromptError' ||
+    error.message.includes('SIGINT') ||
+    error.message.includes('force closed')
+  );
+}
+
+async function runMenuAction(action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (error: unknown) {
+    if (isCancellation(error)) {
+      throw error;
+    }
+
+    console.log();
+    console.error(chalk.red(errorMessage(error)));
+  }
 }
 
 async function run(command: string, args: string[], options: RunOptions = {}) {
@@ -179,6 +223,72 @@ async function switchModel(target: ModelInfo): Promise<boolean> {
   }
 }
 
+async function switchModelInteractive(target: ModelInfo): Promise<boolean> {
+  const currentPath = getCurrentModel();
+  const currentModel = currentPath ? getModelByRelativePath(currentPath) : null;
+
+  if (!currentModel || currentModel.relativePath === target.relativePath) {
+    return switchModel(target);
+  }
+
+  console.log();
+
+  const shouldCompare = await confirm({
+    message: `Compare ${friendlyModelName(currentModel.relativePath)} with ${friendlyModelName(target.relativePath)} before switching?`,
+    default: false,
+  });
+
+  if (!shouldCompare) {
+    return switchModel(target);
+  }
+
+  const entries = await benchmarkModels([currentModel, target], switchModel);
+
+  printComparisonTable(entries);
+
+  console.log();
+
+  const decision = await select<'switch' | 'keep' | 'delete'>({
+    message: `Use ${friendlyModelName(target.relativePath)}?`,
+    choices: [
+      {
+        name: `Yes — switch to ${friendlyModelName(target.relativePath)}`,
+        value: 'switch',
+      },
+      {
+        name: `No — keep ${friendlyModelName(currentModel.relativePath)}, do not switch`,
+        value: 'keep',
+      },
+      {
+        name: chalk.red(`Delete ${friendlyModelName(target.relativePath)}`),
+        value: 'delete',
+      },
+    ],
+  });
+
+  if (decision === 'switch') {
+    return switchModel(target);
+  }
+
+  await switchModel(currentModel);
+
+  if (decision === 'delete') {
+    const deleteChoice = getDeleteTarget(target);
+
+    removeTarget(deleteChoice.deletePath);
+
+    console.log(chalk.dim(`Deleted ${deleteChoice.displayPath}.`));
+  } else {
+    console.log(
+      chalk.dim(
+        `Keeping ${friendlyModelName(target.relativePath)} installed without switching.`,
+      ),
+    );
+  }
+
+  return false;
+}
+
 async function interactiveModelSelect(): Promise<void> {
   const models = findModels();
   const current = getCurrentModel();
@@ -208,37 +318,49 @@ async function interactiveModelSelect(): Promise<void> {
 
   console.log();
 
-  const chosen = await select<ModelInfo | null>({
-    message: 'Select a model',
+  const chosen = await search<ModelInfo | null>({
+    message: 'Select a model (type to search)',
     pageSize: 15,
-    choices: [
-      ...models.map((model: ModelInfo) => {
-        const isCurrent = model.relativePath === current;
+    source: (term) => {
+      const filtered = term
+        ? models.filter((model: ModelInfo) =>
+            matchesSearchTerm(
+              term,
+              friendlyModelName(model.relativePath),
+              model.relativePath,
+            ),
+          )
+        : models;
 
-        return {
-          name: [
-            isCurrent ? chalk.green('●') : chalk.dim('○'),
+      return [
+        ...filtered.map((model: ModelInfo) => {
+          const isCurrent = model.relativePath === current;
 
-            isCurrent
-              ? chalk.bold.green(friendlyModelName(model.relativePath))
-              : chalk.white(friendlyModelName(model.relativePath)),
+          return {
+            name: [
+              isCurrent ? chalk.green('●') : chalk.dim('○'),
 
-            chalk.dim(formatBytes(model.size)),
+              isCurrent
+                ? chalk.bold.green(friendlyModelName(model.relativePath))
+                : chalk.white(friendlyModelName(model.relativePath)),
 
-            isCurrent ? chalk.yellow('current') : '',
-          ]
-            .filter(Boolean)
-            .join('  '),
+              chalk.dim(formatBytes(model.size)),
 
-          value: model,
-          description: model.relativePath,
-        };
-      }),
-      {
-        name: chalk.dim('← Back'),
-        value: null,
-      },
-    ],
+              isCurrent ? chalk.yellow('current') : '',
+            ]
+              .filter(Boolean)
+              .join('  '),
+
+            value: model,
+            description: model.relativePath,
+          };
+        }),
+        {
+          name: chalk.dim('← Back'),
+          value: null,
+        },
+      ];
+    },
   });
 
   if (!chosen) {
@@ -246,7 +368,7 @@ async function interactiveModelSelect(): Promise<void> {
   }
 
   console.log();
-  await switchModel(chosen);
+  await switchModelInteractive(chosen);
 }
 
 function listModels(): void {
@@ -408,6 +530,10 @@ async function mainMenu(): Promise<void> {
           value: 'benchmark',
         },
         {
+          name: 'Compare models (benchmark)',
+          value: 'compare',
+        },
+        {
           name: 'Status',
           value: 'status',
         },
@@ -428,13 +554,13 @@ async function mainMenu(): Promise<void> {
 
     switch (action) {
       case 'switch':
-        await interactiveModelSelect();
+        await runMenuAction(interactiveModelSelect);
         break;
 
       case 'download':
         clearScreen();
 
-        await runDownloadCommand(switchModel);
+        await runMenuAction(() => runDownloadCommand(switchModelInteractive));
 
         await pause();
         break;
@@ -442,7 +568,7 @@ async function mainMenu(): Promise<void> {
       case 'delete':
         clearScreen();
 
-        await runDeleteCommand();
+        await runMenuAction(runDeleteCommand);
 
         await pause();
         break;
@@ -450,7 +576,15 @@ async function mainMenu(): Promise<void> {
       case 'benchmark':
         clearScreen();
 
-        await runBenchmarkCommand();
+        await runMenuAction(runBenchmarkCommand);
+
+        await pause();
+        break;
+
+      case 'compare':
+        clearScreen();
+
+        await runMenuAction(() => runCompareModelsCommand(switchModel));
 
         await pause();
         break;
@@ -458,7 +592,7 @@ async function mainMenu(): Promise<void> {
       case 'status':
         clearScreen();
 
-        await showStatus();
+        await runMenuAction(showStatus);
 
         await pause();
         break;
@@ -466,7 +600,7 @@ async function mainMenu(): Promise<void> {
       case 'restart':
         clearScreen();
 
-        await restartCommand();
+        await runMenuAction(restartCommand);
 
         await pause();
         break;
@@ -474,7 +608,7 @@ async function mainMenu(): Promise<void> {
       case 'logs':
         clearScreen();
 
-        await showLogs(100);
+        await runMenuAction(() => showLogs(100));
 
         await pause();
         break;
@@ -501,6 +635,7 @@ ${chalk.bold('Usage')}
   manager remove         Alias for delete
   manager rm             Alias for delete
   manager benchmark      Benchmark the active model
+  manager compare        Benchmark and compare multiple models
   manager list           List installed models
   manager current        Show the active model
   manager status         Show server and storage status
@@ -527,7 +662,7 @@ async function main(): Promise<void> {
       break;
 
     case 'download':
-      await runDownloadCommand(switchModel);
+      await runDownloadCommand(switchModelInteractive);
       break;
 
     case 'delete':
@@ -538,6 +673,10 @@ async function main(): Promise<void> {
 
     case 'benchmark':
       await runBenchmarkCommand();
+      break;
+
+    case 'compare':
+      await runCompareModelsCommand(switchModel);
       break;
 
     case 'list':
@@ -584,13 +723,7 @@ async function main(): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  const message = errorMessage(error);
-
-  if (
-    (error instanceof Error && error.name === 'ExitPromptError') ||
-    message.includes('SIGINT') ||
-    message.includes('force closed')
-  ) {
+  if (isCancellation(error)) {
     console.log();
     console.log(chalk.dim('Cancelled.'));
 
@@ -598,11 +731,7 @@ main().catch((error: unknown) => {
   }
 
   console.error();
-  console.error(
-    chalk.red(
-      error instanceof Error ? (error.stack ?? error.message) : message,
-    ),
-  );
+  console.error(chalk.red(errorMessage(error)));
 
   process.exitCode = 1;
 });
